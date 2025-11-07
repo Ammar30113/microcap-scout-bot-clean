@@ -1,0 +1,19 @@
+# General
+__pycache__/
+*.py[cod]
+*.pyc
+.Python
+.venv
+venv/
+env/
+
+# OS
+.DS_Store
+
+# Python tooling
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Env files
+.env
