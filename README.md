@@ -63,7 +63,7 @@ Required keys:
 - `FINVIZ_TOKEN` (Finviz screener)
 - `STOCKDATA_API_KEY`
 - `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
-- `APCA_API_BASE_URL`, `APCA_API_DATA_URL` (use Railway secrets for paper/live)
+- `APCA_API_BASE_URL`, `APCA_API_DATA_URL` (leave off `/v2`; the SDK appends it automatically)
 - `TRADING_BUDGET` (e.g., `1000`)
 
 Optional overrides: `ALPACA_BASE_URL`, `DEFAULT_SYMBOL`, `ENVIRONMENT`, `PORT`.

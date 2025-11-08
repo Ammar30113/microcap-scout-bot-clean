@@ -43,7 +43,9 @@ async def _run_daily_strategy() -> None:
 
 def _trade_sync(symbols: list[str]) -> None:
     for symbol in symbols:
-        maybe_trade(symbol)
+        should_continue = maybe_trade(symbol)
+        if not should_continue:
+            break
 
 
 app.include_router(health_router)

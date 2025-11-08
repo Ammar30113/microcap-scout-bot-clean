@@ -41,9 +41,10 @@ def get_allocated_capital() -> float:
         return ALLOCATED_CAPITAL
 
 
-def maybe_trade(symbol: str) -> None:
+def maybe_trade(symbol: str) -> bool:
     """
     Attempt to open a bracket order for the provided symbol, obeying budget limits.
+    Returns False when the caller should stop evaluating additional symbols.
     """
     symbol = symbol.upper()
     allocation = TRADING_BUDGET * ALLOCATION_RATIO
@@ -51,12 +52,12 @@ def maybe_trade(symbol: str) -> None:
 
     if allocation <= 0:
         _record_action(symbol, "skipped", "Allocation is zero", {"budget": TRADING_BUDGET})
-        return
+        return False
 
     alpaca = _get_alpaca_client()
     if alpaca is None:
         _record_action(symbol, "skipped", "Alpaca credentials missing")
-        return
+        return False
 
     cash_balance: Optional[float] = None
     try:
@@ -65,20 +66,20 @@ def maybe_trade(symbol: str) -> None:
     except Exception as exc:  # pragma: no cover - network
         logger.warning("Unable to fetch Alpaca cash: %s", exc)
         _record_action(symbol, "skipped", f"Alpaca cash lookup failed: {exc}")
-        return
+        return False
 
     if cash < allocation:
         msg = f"Insufficient cash ({cash:.2f}) for allocation {allocation:.2f}"
         logger.info("%s skipped - %s", symbol, msg)
         _record_action(symbol, "skipped", msg, {"cash": cash})
-        return
+        return True
 
     entry_price = get_latest_price(symbol)
     if entry_price is None:
         msg = "No price data"
         logger.info("%s skipped - %s (cash %.2f)", symbol, msg, cash_balance or 0.0)
         _record_action(symbol, "skipped", msg, {"cash": cash_balance})
-        return
+        return True
 
     qty = max(int(allocation // entry_price), 1)
     position_cost = qty * entry_price
@@ -99,7 +100,7 @@ def maybe_trade(symbol: str) -> None:
                 msg,
                 {"allocated": ALLOCATED_CAPITAL, "cash": cash_balance},
             )
-            return
+            return False
 
     take_profit = round(entry_price * (1 + TAKE_PROFIT_RATIO), 2)
     stop_loss = round(entry_price * (1 - STOP_LOSS_RATIO), 2)
@@ -138,6 +139,9 @@ def maybe_trade(symbol: str) -> None:
     except Exception as exc:  # pragma: no cover - network
         logger.warning("Failed to place order for %s: %s", symbol, exc)
         _record_action(symbol, "skipped", f"order failed: {exc}")
+        return False
+
+    return True
 
 
 def _get_alpaca_client() -> Optional[tradeapi.REST]:
@@ -155,7 +159,14 @@ def _get_alpaca_client() -> Optional[tradeapi.REST]:
         logger.warning("Alpaca credentials not configured")
         return None
 
-    client = tradeapi.REST(api_key, secret_key, base_url, api_version="v2")
+    sanitized_base = _sanitize_alpaca_base(base_url)
+
+    try:
+        client = tradeapi.REST(api_key, secret_key, sanitized_base, api_version="v2")
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("Failed to initialize Alpaca client: %s", exc)
+        return None
+
     with STATE_LOCK:
         _alpaca_client = client
 
@@ -180,3 +191,10 @@ def _record_action(symbol: str, status: str, reason: str, details: Optional[Dict
         TRADE_LOG.append(entry)
         if len(TRADE_LOG) > MAX_LOG_LENGTH:
             del TRADE_LOG[: len(TRADE_LOG) - MAX_LOG_LENGTH]
+
+
+def _sanitize_alpaca_base(url: str) -> str:
+    stripped = url.rstrip("/")
+    if stripped.endswith("/v2"):
+        stripped = stripped[: -len("/v2")]
+    return stripped.rstrip("/")

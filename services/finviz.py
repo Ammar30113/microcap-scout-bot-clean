@@ -12,6 +12,12 @@ FINVIZ_BASE_URL = "https://finviz.com/api/quote.ashx"
 FINVIZ_EXPORT_URL = "https://finviz.com/export.ashx"
 MICROCAP_FALLBACK = ["IWM", "IWC", "URTY", "SMLF", "VTWO"]
 
+EXPORT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; microcap-scout-bot/0.2)",
+    "Accept": "text/csv",
+    "Referer": "https://finviz.com/screener.ashx",
+}
+
 logger = get_logger(__name__)
 
 
@@ -65,9 +71,12 @@ async def fetch_microcap_screen(limit: int = 25) -> List[str]:
 
     async with get_http_client() as client:
         try:
-            response = await client.get(FINVIZ_EXPORT_URL, params=params)
+            response = await client.get(FINVIZ_EXPORT_URL, params=params, headers=EXPORT_HEADERS)
             response.raise_for_status()
             content = response.text
+        except httpx.HTTPStatusError as exc:
+            logger.warning("Finviz screener request failed (%s). Using fallback list.", exc.response.status_code)
+            return MICROCAP_FALLBACK[:limit]
         except httpx.HTTPError as exc:
             logger.warning("Finviz screener request failed: %s", exc)
             return MICROCAP_FALLBACK[:limit]

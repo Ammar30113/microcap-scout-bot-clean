@@ -76,11 +76,11 @@ def get_cached_universe() -> Dict[str, Any]:
 async def _filter_large_caps(tickers: List[str]) -> List[str]:
     """
     Use yfinance fast info to enforce a volume and daily momentum threshold for core tickers.
+    Sequential fetch keeps Yahoo throttling under control.
     """
-    snapshots = await asyncio.gather(*(fetch_yfinance_snapshot(t) for t in tickers))
-
     qualified: List[str] = []
-    for snapshot in snapshots:
+    for ticker in tickers:
+        snapshot = await fetch_yfinance_snapshot(ticker)
         data = snapshot.get("data") or {}
         fast_info = data.get("fast_info") or {}
         change_pct = fast_info.get("regularMarketChangePercent")
@@ -92,7 +92,10 @@ async def _filter_large_caps(tickers: List[str]) -> List[str]:
             continue
         if volume < MIN_VOLUME:
             continue
-        qualified.append(snapshot.get("symbol", "").upper())
+        qualified.append(snapshot.get("symbol", ticker).upper())
+
+        # Back off slightly between requests to avoid 429s.
+        await asyncio.sleep(0.35)
 
     if not qualified:
         logger.warning("Large-cap filter returned empty set, falling back to baseline core tickers")
