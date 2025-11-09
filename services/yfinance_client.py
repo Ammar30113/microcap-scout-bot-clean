@@ -4,9 +4,11 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import yfinance as yf
 
 from utils.logger import get_logger
+from utils.settings import get_settings
 
 logger = get_logger(__name__)
 
@@ -16,6 +18,12 @@ THROTTLE_LIMIT = 10
 THROTTLE_SLEEP_SECONDS = 10
 MAX_FAILURES = 3
 RATE_LIMIT_BACKOFF = timedelta(seconds=90)
+FALLBACK_HTTP_TIMEOUT = 6.0
+
+STOCKDATA_BASE_URL = "https://api.stockdata.org/v1/data/quote"
+ALPACA_TRADE_PATH = "/stocks/{symbol}/trades/latest"
+ALPACA_QUOTE_PATH = "/stocks/{symbol}/quotes/latest"
+
 
 CacheEntry = Tuple[datetime, Dict[str, Any]]
 
@@ -42,6 +50,9 @@ def _sync_fetch(symbol: str) -> Dict[str, Any]:
     wait_seconds = _current_rate_limit_delay(now)
     if wait_seconds > 0:
         payload["warning"] = f"yfinance_backoff_{int(wait_seconds)}s"
+        fallback_snapshot = _fallback_snapshot(symbol, now)
+        if fallback_snapshot is not None:
+            payload["data"] = fallback_snapshot
         return payload
 
     cached = _get_cached(symbol, now)
@@ -87,6 +98,12 @@ def _sync_fetch(symbol: str) -> Dict[str, Any]:
         payload["error"] = str(exc)
         if failure_count >= MAX_FAILURES:
             payload["warning"] = "Skipping yfinance lookup after repeated failures"
+        fallback_snapshot = _fallback_snapshot(symbol, now)
+        if fallback_snapshot is not None:
+            payload["data"] = fallback_snapshot
+            existing_warning = payload.get("warning")
+            fallback_note = "Using fallback quote provider"
+            payload["warning"] = f"{existing_warning}; {fallback_note}" if existing_warning else fallback_note
 
     return payload
 
@@ -181,8 +198,13 @@ def get_latest_price(symbol: str) -> Optional[float]:
     """
     Lightweight helper for synchronous price lookups used by the trading engine.
     """
-    snapshot = _sync_fetch(symbol.upper())
+    normalized_symbol = symbol.upper()
+    snapshot = _sync_fetch(normalized_symbol)
     data = snapshot.get("data") or {}
+    if not data:
+        fallback = _fallback_snapshot(normalized_symbol, datetime.utcnow())
+        if fallback is not None:
+            data = fallback
     fast_info = data.get("fast_info") or {}
 
     price_candidates = [
@@ -199,3 +221,115 @@ def get_latest_price(symbol: str) -> Optional[float]:
     if close_value is not None:
         return float(close_value)
     return None
+
+
+def _fallback_snapshot(symbol: str, now: datetime) -> Optional[Dict[str, Any]]:
+    """
+    Attempt to build a snapshot using configured data providers when yfinance is unavailable.
+    """
+    upper_symbol = symbol.upper()
+    price = _fetch_stockdata_price(upper_symbol)
+    source = "stockdata"
+    if price is None:
+        price = _fetch_alpaca_price(upper_symbol)
+        source = "alpaca"
+    if price is None:
+        logger.debug("No fallback price providers produced data for %s", upper_symbol)
+        return None
+
+    snapshot = _build_price_snapshot(price, source)
+    _cache_result(upper_symbol, now, snapshot)
+    logger.info("Using %s fallback pricing for %s", source, upper_symbol)
+    return snapshot
+
+
+def _build_price_snapshot(price: float, source: str) -> Dict[str, Any]:
+    return {
+        "fast_info": {"lastPrice": price},
+        "history": {"Close": price},
+        "meta": {"price_source": source},
+    }
+
+
+def _fetch_stockdata_price(symbol: str) -> Optional[float]:
+    settings = get_settings()
+    api_key = settings.stockdata_api_key
+    if not api_key:
+        return None
+
+    params = {"symbols": symbol, "api_token": api_key}
+    try:
+        response = httpx.get(
+            STOCKDATA_BASE_URL,
+            params=params,
+            timeout=FALLBACK_HTTP_TIMEOUT,
+            headers={"Accept": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("StockData fallback failed for %s: %s", symbol, exc)
+        return None
+
+    records = payload.get("data") or []
+    if not records:
+        return None
+
+    record = records[0]
+    for field_name in ("price", "last", "close", "previous_close_price", "prev_close"):
+        value = _coerce_float(record.get(field_name))
+        if value is not None:
+            return value
+    return None
+
+
+def _fetch_alpaca_price(symbol: str) -> Optional[float]:
+    settings = get_settings()
+    api_key = settings.alpaca_api_key
+    secret_key = settings.alpaca_secret_key
+    if not api_key or not secret_key:
+        return None
+
+    base_url = str(settings.alpaca_base_url).rstrip("/")
+    headers = {
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
+        "Accept": "application/json",
+    }
+
+    trade_url = f"{base_url}{ALPACA_TRADE_PATH.format(symbol=symbol)}"
+    try:
+        response = httpx.get(trade_url, headers=headers, timeout=FALLBACK_HTTP_TIMEOUT)
+        response.raise_for_status()
+        trade_payload = response.json()
+        trade = trade_payload.get("trade") or {}
+        trade_price = _coerce_float(trade.get("p") or trade.get("price"))
+        if trade_price is not None:
+            return trade_price
+    except httpx.HTTPError as exc:
+        logger.debug("Alpaca trade fallback failed for %s: %s", symbol, exc)
+
+    quote_url = f"{base_url}{ALPACA_QUOTE_PATH.format(symbol=symbol)}"
+    try:
+        response = httpx.get(quote_url, headers=headers, timeout=FALLBACK_HTTP_TIMEOUT)
+        response.raise_for_status()
+        quote_payload = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Alpaca quote fallback failed for %s: %s", symbol, exc)
+        return None
+
+    quote = quote_payload.get("quote") or {}
+    ask = _coerce_float(quote.get("ap") or quote.get("ask_price"))
+    bid = _coerce_float(quote.get("bp") or quote.get("bid_price"))
+    if ask is not None and bid is not None:
+        return (ask + bid) / 2.0
+    return ask or bid
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

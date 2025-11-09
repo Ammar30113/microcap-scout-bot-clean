@@ -37,7 +37,12 @@ async def fetch_finviz_snapshot(symbol: str) -> Dict[str, Any]:
 
     async with get_http_client() as client:
         try:
-            response = await client.get(FINVIZ_BASE_URL, params=params, headers=headers)
+            response = await client.get(
+                FINVIZ_BASE_URL,
+                params=params,
+                headers=headers,
+                follow_redirects=True,
+            )
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning("Finviz request failed: %s", exc)
@@ -71,7 +76,12 @@ async def fetch_microcap_screen(limit: int = 25) -> List[str]:
 
     async with get_http_client() as client:
         try:
-            response = await client.get(FINVIZ_EXPORT_URL, params=params, headers=EXPORT_HEADERS)
+            response = await client.get(
+                FINVIZ_EXPORT_URL,
+                params=params,
+                headers=EXPORT_HEADERS,
+                follow_redirects=True,
+            )
             response.raise_for_status()
             content = response.text
         except httpx.HTTPStatusError as exc:
