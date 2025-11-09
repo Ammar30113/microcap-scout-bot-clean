@@ -34,6 +34,7 @@ async def fetch_finviz_snapshot(symbol: str) -> Dict[str, Any]:
 
     params = {"ticker": symbol.upper(), "token": settings.finviz_api_key}
     headers = {"User-Agent": "microcap-scout-bot/0.1.0"}
+    cookies = {"auth": settings.finviz_api_key}
 
     async with get_http_client() as client:
         try:
@@ -41,6 +42,7 @@ async def fetch_finviz_snapshot(symbol: str) -> Dict[str, Any]:
                 FINVIZ_BASE_URL,
                 params=params,
                 headers=headers,
+                cookies=cookies,
                 follow_redirects=True,
             )
             response.raise_for_status()
@@ -73,6 +75,7 @@ async def fetch_microcap_screen(limit: int = 25) -> List[str]:
         "c": "0",
         "t": settings.finviz_api_key,
     }
+    cookies = {"auth": settings.finviz_api_key}
 
     async with get_http_client() as client:
         try:
@@ -80,9 +83,14 @@ async def fetch_microcap_screen(limit: int = 25) -> List[str]:
                 FINVIZ_EXPORT_URL,
                 params=params,
                 headers=EXPORT_HEADERS,
+                cookies=cookies,
                 follow_redirects=True,
             )
             response.raise_for_status()
+            content_type = response.headers.get("content-type", "").lower()
+            if "text/csv" not in content_type:
+                logger.warning("Finviz screener returned unexpected content-type %s, using fallback", content_type)
+                return MICROCAP_FALLBACK[:limit]
             content = response.text
         except httpx.HTTPStatusError as exc:
             logger.warning("Finviz screener request failed (%s). Using fallback list.", exc.response.status_code)

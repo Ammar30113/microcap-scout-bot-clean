@@ -81,7 +81,18 @@ def maybe_trade(symbol: str) -> bool:
         _record_action(symbol, "skipped", msg, {"cash": cash_balance})
         return True
 
-    qty = max(int(allocation // entry_price), 1)
+    qty = int(allocation // entry_price)
+    if qty <= 0:
+        msg = f"Price {entry_price:.2f} exceeds allocation {allocation:.2f}"
+        logger.info("%s skipped - %s (cash %.2f)", symbol, msg, cash_balance or 0.0)
+        _record_action(
+            symbol,
+            "skipped",
+            msg,
+            {"cash": cash_balance, "allocation": allocation, "price": entry_price},
+        )
+        return True
+
     position_cost = qty * entry_price
 
     with STATE_LOCK:
