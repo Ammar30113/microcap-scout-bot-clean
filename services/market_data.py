@@ -1,4 +1,5 @@
 import asyncio
+import statistics
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -8,19 +9,16 @@ from utils.settings import get_settings
 from .alpaca import fetch_alpaca_latest_quote
 from .finviz import fetch_finviz_snapshot, fetch_microcap_screen
 from .finnhub_client import get_company_news as get_finnhub_company_news
-from .finnhub_client import get_quote as get_finnhub_quote
 from .finnhub_client import get_sentiment as get_finnhub_sentiment
 from .massive_client import get_quote as get_massive_quote
 from .stockdata import fetch_stockdata_quote
-from .yfinance_client import fetch_yfinance_snapshot
 
 logger = get_logger(__name__)
 
 CORE_TICKERS = ["AAPL", "NVDA", "TSLA", "AMD", "META", "MSFT", "GOOG", "AMZN"]
-MIN_CHANGE_PERCENT = 1.0
-MIN_VOLUME = 1_000_000
 MICROCAP_LIMIT = 25
 INSIGHTS_CACHE_TTL = timedelta(seconds=90)
+SUMMARY_SAMPLE_SIZE = 10
 
 LAST_UNIVERSE: Dict[str, Any] = {"symbols": [], "built_at": None}
 INSIGHTS_CACHE: Dict[str, Tuple[datetime, Dict[str, Any]]] = {}
@@ -33,16 +31,22 @@ async def get_market_snapshot(symbol: str) -> Dict[str, Any]:
     """Return a blended Massive/Finnhub snapshot for ``symbol``."""
 
     target = symbol.upper()
-    price = await _get_price_with_fallback(target)
+    price: Optional[float] = None
+    try:
+        price = await get_massive_quote(target)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.error("Massive API failed for %s: %s", target, exc)
 
     sentiment: Dict[str, Any] = {}
     news: List[Dict[str, Any]] = []
     try:
-        sentiment_task = asyncio.create_task(get_finnhub_sentiment(target))
-        news_task = asyncio.create_task(get_finnhub_company_news(target))
-        sentiment, news = await asyncio.gather(sentiment_task, news_task)
+        sentiment = await get_finnhub_sentiment(target)
     except Exception as exc:  # pragma: no cover - network guard
-        logger.warning("Finnhub enrichment failed for %s: %s", target, exc)
+        logger.warning("Finnhub sentiment failed for %s: %s", target, exc)
+    try:
+        news = await get_finnhub_company_news(target)
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Finnhub news lookup failed for %s: %s", target, exc)
 
     return {
         "symbol": target,
@@ -69,7 +73,7 @@ def score_stock(snapshot: Dict[str, Any]) -> float:
 
 async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     """
-    Fetch a blended market snapshot from Finviz, StockData, Alpaca, and Yahoo Finance.
+    Fetch a blended market snapshot from Finviz, StockData, Alpaca, and Massive/Finnhub enrichments.
     """
     settings = get_settings()
     target_symbol = (symbol or settings.default_symbol).upper()
@@ -83,20 +87,18 @@ async def gather_symbol_insights(symbol: str | None = None) -> Dict[str, Any]:
     finviz_task = fetch_finviz_snapshot(target_symbol)
     stockdata_task = fetch_stockdata_quote(target_symbol)
     alpaca_task = fetch_alpaca_latest_quote(target_symbol)
-    yfinance_task = fetch_yfinance_snapshot(target_symbol)
     snapshot_task = get_market_snapshot(target_symbol)
 
-    finviz, stockdata, alpaca, yfinance_data, market_snapshot = await asyncio.gather(
+    finviz, stockdata, alpaca, market_snapshot = await asyncio.gather(
         finviz_task,
         stockdata_task,
         alpaca_task,
-        yfinance_task,
         snapshot_task,
     )
 
     result = {
         "symbol": target_symbol,
-        "sources": [finviz, stockdata, alpaca, yfinance_data],
+        "sources": [finviz, stockdata, alpaca],
         "market_snapshot": market_snapshot,
         "score": score_stock(market_snapshot),
     }
@@ -120,6 +122,7 @@ async def get_daily_universe() -> List[str]:
     LAST_UNIVERSE["symbols"] = merged
     LAST_UNIVERSE["built_at"] = datetime.utcnow().isoformat()
 
+    await _log_universe_summary(merged)
     logger.info("Hybrid universe ready with %s symbols", len(merged))
     return merged
 
@@ -132,34 +135,10 @@ def get_cached_universe() -> Dict[str, Any]:
 
 
 async def _filter_large_caps(tickers: List[str]) -> List[str]:
-    """
-    Use yfinance fast info to enforce a volume and daily momentum threshold for core tickers.
-    Sequential fetch keeps Yahoo throttling under control.
-    """
-    qualified: List[str] = []
-    for ticker in tickers:
-        snapshot = await fetch_yfinance_snapshot(ticker)
-        data = snapshot.get("data") or {}
-        fast_info = data.get("fast_info") or {}
-        change_pct = fast_info.get("regularMarketChangePercent")
-        volume = fast_info.get("regularMarketVolume") or fast_info.get("volume")
+    """Return the baseline list when advanced filtering data is unavailable."""
 
-        if change_pct is None or volume is None:
-            continue
-        if change_pct < MIN_CHANGE_PERCENT:
-            continue
-        if volume < MIN_VOLUME:
-            continue
-        qualified.append(snapshot.get("symbol", ticker).upper())
-
-        # Back off slightly between requests to avoid 429s.
-        await asyncio.sleep(0.35)
-
-    if not qualified:
-        logger.warning("Large-cap filter returned empty set, falling back to baseline core tickers")
-        return tickers
-
-    return qualified
+    logger.info("Returning baseline large-cap list (yfinance dependency removed)")
+    return tickers
 
 
 def _get_cached_insights(symbol: str, now: datetime) -> Dict[str, Any] | None:
@@ -177,18 +156,6 @@ def _store_cached_insights(symbol: str, timestamp: datetime, payload: Dict[str, 
     INSIGHTS_CACHE[symbol] = (timestamp, payload)
 
 
-async def _get_price_with_fallback(symbol: str) -> Optional[float]:
-    try:
-        return await get_massive_quote(symbol)
-    except Exception as exc:  # pragma: no cover - network guard
-        logger.warning("Massive quote failed for %s: %s", symbol, exc)
-    try:
-        return await get_finnhub_quote(symbol)
-    except Exception as exc:  # pragma: no cover - network guard
-        logger.warning("Finnhub quote fallback failed for %s: %s", symbol, exc)
-    return None
-
-
 def _extract_sentiment_score(payload: Dict[str, Any]) -> float:
     raw = payload.get("score")
     if raw is None:
@@ -199,3 +166,32 @@ def _extract_sentiment_score(payload: Dict[str, Any]) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return 0.0
+
+
+def summarize_universe(universe_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute basic aggregate stats for a set of market snapshots."""
+
+    prices = [entry["price"] for entry in universe_data if entry.get("price") is not None]
+    if not prices:
+        return {"symbols": len(universe_data), "avg_price": 0}
+
+    return {
+        "symbols": len(universe_data),
+        "avg_price": round(statistics.mean(prices), 2),
+        "min_price": round(min(prices), 2),
+        "max_price": round(max(prices), 2),
+    }
+
+
+async def _log_universe_summary(symbols: List[str]) -> None:
+    if not symbols:
+        return
+    sample = symbols[:SUMMARY_SAMPLE_SIZE]
+    try:
+        snapshots = await asyncio.gather(*(get_market_snapshot(symbol) for symbol in sample))
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Unable to build universe summary: %s", exc)
+        return
+
+    summary = summarize_universe(snapshots)
+    logger.info("Universe sample summary: %s", summary)

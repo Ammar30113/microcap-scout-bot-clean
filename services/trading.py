@@ -1,16 +1,17 @@
+import asyncio
 import json
 import os
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import alpaca_trade_api as tradeapi
 
 from utils.logger import get_logger
 from utils.settings import get_settings
 
-from .yfinance_client import get_latest_price
+from .massive_client import get_quote as get_massive_quote
 
 logger = get_logger(__name__)
 
@@ -26,6 +27,7 @@ MIN_CONFIDENCE = 0.02
 MAX_CONFIDENCE = 0.15
 DEFAULT_CONFIDENCE = 0.08
 PORTFOLIO_FILE = Path(os.getenv("PORTFOLIO_FILE", "data/portfolio_state.json"))
+SUMMARY_FILE = Path(os.getenv("SUMMARY_FILE", "data/daily_summary.json"))
 MODE = os.getenv("MODE", settings.mode)
 
 _alpaca_client: Optional[tradeapi.REST] = None
@@ -79,7 +81,7 @@ def _get_remaining_daily_budget() -> float:
         return max(remaining, 0.0)
 
 
-def _record_portfolio_trade(symbol: str, qty: int, price: float) -> None:
+def _record_portfolio_trade(symbol: str, qty: int, price: float, take_profit: float, stop_loss: float) -> None:
     cost = qty * price
     with STATE_LOCK:
         state = _ensure_today_portfolio_state_unlocked()
@@ -89,6 +91,8 @@ def _record_portfolio_trade(symbol: str, qty: int, price: float) -> None:
                 "symbol": symbol,
                 "qty": qty,
                 "price": round(price, 2),
+                "tp": round(take_profit, 2),
+                "sl": round(stop_loss, 2),
                 "timestamp": datetime.utcnow().isoformat(),
             }
         )
@@ -103,6 +107,35 @@ def _calculate_allocation_from_confidence(confidence: Optional[float]) -> Tuple[
     capped = max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, value))
     allocation = capped * DAILY_BUDGET
     return allocation, capped
+
+
+def _run_coro_sync(factory: Callable[[], Awaitable[Any]]) -> Any:
+    try:
+        return asyncio.run(factory())
+    except RuntimeError as exc:
+        # Raised when asyncio.run is invoked from an existing loop (e.g., tests).
+        message = str(exc).lower()
+        if "asyncio.run()" not in message:
+            raise
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(factory())
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
+def _get_latest_price(symbol: str) -> Optional[float]:
+    def _factory() -> Awaitable[Any]:
+        return get_massive_quote(symbol)
+
+    try:
+        result = _run_coro_sync(_factory)
+        return float(result) if result is not None else None
+    except Exception as exc:  # pragma: no cover - defensive log
+        logger.warning("Massive price lookup failed for %s: %s", symbol, exc)
+        return None
 
 
 def get_account_cash(alpaca: tradeapi.REST) -> float:
@@ -176,7 +209,7 @@ def maybe_trade(symbol: str, confidence: Optional[float] = None) -> bool:
         _record_action(symbol, "skipped", msg, {"cash": cash})
         return True
 
-    entry_price = get_latest_price(symbol)
+    entry_price = _get_latest_price(symbol)
     if entry_price is None:
         msg = "No price data"
         logger.info("%s skipped - %s (cash %.2f)", symbol, msg, cash_balance or 0.0)
@@ -235,7 +268,7 @@ def maybe_trade(symbol: str, confidence: Optional[float] = None) -> bool:
             stop_loss={"stop_price": stop_loss},
         )
         _increment_allocation(position_cost)
-        _record_portfolio_trade(symbol, qty, entry_price)
+        _record_portfolio_trade(symbol, qty, entry_price, take_profit, stop_loss)
         logger.info(
             "%s: entry %.2f, TP %.2f, SL %.2f, qty %s",
             symbol,
@@ -320,3 +353,38 @@ def _sanitize_alpaca_base(url: str) -> str:
     if stripped.endswith("/v2"):
         stripped = stripped[: -len("/v2")]
     return stripped.rstrip("/")
+
+
+def _save_summary(summary: Dict[str, Any]) -> None:
+    try:
+        SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with SUMMARY_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2)
+    except OSError as exc:  # pragma: no cover - filesystem guard
+        logger.warning("Unable to persist daily summary: %s", exc)
+
+
+def daily_summary() -> Optional[Dict[str, Any]]:
+    """Persist and log a simple daily trading summary."""
+
+    if not PORTFOLIO_FILE.exists():
+        logger.info("No portfolio state available for summary")
+        return None
+
+    with STATE_LOCK:
+        state = _load_portfolio_state_unlocked()
+        positions = list(state.get("positions", []))
+        date_value = state.get("date")
+
+    total_cost = round(sum((p.get("qty", 0) or 0) * (p.get("price", 0.0) or 0.0) for p in positions), 2)
+    remaining = max(DAILY_BUDGET - total_cost, 0.0)
+    summary = {
+        "date": date_value,
+        "trades": len(positions),
+        "capital_used": total_cost,
+        "remaining_budget": round(remaining, 2),
+    }
+
+    _save_summary(summary)
+    logger.info("[SUMMARY] %s", json.dumps(summary))
+    return summary

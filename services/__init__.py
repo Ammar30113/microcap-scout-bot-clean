@@ -8,6 +8,7 @@ from .market_data import (
     get_daily_universe,
     get_market_snapshot,
     score_stock,
+    summarize_universe,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "get_cached_universe",
     "get_market_snapshot",
     "score_stock",
+    "summarize_universe",
 ]

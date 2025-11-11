@@ -52,7 +52,7 @@ PRODUCT_CATALOG: List[Product] = [
         name="Daily Hybrid Strategy",
         slug="daily-hybrid-strategy",
         description="Budget-aware allocator blending Finviz/Finnhub sentiment with Massive quotes and Alpaca execution.",
-        integrations=["Alpaca", "Finviz", "Massive", "Finnhub", "yfinance"],
+        integrations=["Alpaca", "Finviz", "Massive", "Finnhub"],
         sample_symbol="AAPL",
     ),
 ]

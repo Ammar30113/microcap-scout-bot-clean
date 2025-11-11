@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from routes.health import router as health_router
 from routes.products import router as products_router
 from services.market_data import get_daily_universe
-from services.trading import maybe_trade
+from services.trading import daily_summary, maybe_trade
 from utils.logger import configure_logging
 from utils.settings import get_settings
 
@@ -39,6 +39,7 @@ async def _run_daily_strategy() -> None:
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _trade_sync, symbols)
+    await loop.run_in_executor(None, daily_summary)
 
 
 def _trade_sync(symbols: list[str]) -> None:

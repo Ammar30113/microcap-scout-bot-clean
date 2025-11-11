@@ -1,13 +1,13 @@
 # Microcap Scout Bot (Clean FastAPI Rebuild)
 
-Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, StockData.org, Alpaca, and `yfinance` to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
+Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, StockData.org, Massive, Finnhub, and Alpaca to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
 
 ## Features
 - FastAPI app with `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (Railway/Heroku set `PORT` automatically).
 - `/` health and `/products.json` catalog endpoints stay stable while exposing the latest universe + trade log.
 - Hybrid scanner merges Finviz microcaps with filtered large caps (AAPL, NVDA, TSLA, etc.) and runs daily.
-- Trading engine uses Alpaca bracket orders (8% TP / 4% SL) with utilization guardrails plus a $10k configurable daily budget allocator.
-- Service layer integrates Finviz, StockData.org, Massive, Finnhub, Alpaca, and `yfinance==0.2.52`, backed by in-memory caching and throttling.
+- Trading engine uses Alpaca bracket orders (8% TP / 4% SL) with utilization guardrails, Massive-powered pricing, and a $10k configurable daily budget allocator plus end-of-day summaries.
+- Service layer integrates Finviz, StockData.org, Massive, Finnhub, and Alpaca, backed by in-memory caching and throttling.
 - Environment-driven configuration with `.env.example`, Dockerfile + Procfile for Railway.
 
 ## Project Structure
@@ -25,11 +25,12 @@ Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, 
 ├── services/
 │   ├── __init__.py
 │   ├── alpaca.py
+│   ├── finnhub_client.py
 │   ├── finviz.py
 │   ├── market_data.py
+│   ├── massive_client.py
 │   ├── stockdata.py
-│   ├── trading.py
-│   └── yfinance_client.py
+│   └── trading.py
 ├── utils/
 │   ├── __init__.py
 │   ├── http_client.py
