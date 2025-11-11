@@ -8,24 +8,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY")
-_warned_missing_key = False
+_logged_loaded_key = False
+_logged_missing_key = False
 
-if MASSIVE_API_KEY:
-    logging.info("[INFO] massive_client - MASSIVE_API_KEY loaded successfully")
+
+def _log_api_key_status(key: Optional[str]) -> None:
+    global _logged_loaded_key, _logged_missing_key
+    if key and not _logged_loaded_key:
+        logging.info("[INFO] massive_client - MASSIVE_API_KEY loaded successfully")
+        _logged_loaded_key = True
+    elif not key and not _logged_missing_key:
+        logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
+        _logged_missing_key = True
+
+
+def _get_api_key() -> Optional[str]:
+    key = os.getenv("MASSIVE_API_KEY")
+    _log_api_key_status(key)
+    return key
+
+
+_log_api_key_status(os.getenv("MASSIVE_API_KEY"))
 
 
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
     """Fetch dividend or quote data for ``symbol`` from Massive.com."""
 
-    global _warned_missing_key
-    if not MASSIVE_API_KEY:
-        if not _warned_missing_key:
-            logging.warning("[WARN] MASSIVE_API_KEY missing; skipping Massive request")
-            _warned_missing_key = True
+    api_key = _get_api_key()
+    if not api_key:
         return None
 
-    headers = {"Authorization": f"Bearer {MASSIVE_API_KEY}"}
+    headers = {"Authorization": f"Bearer {api_key}"}
     url = f"https://api.massive.com/v3/reference/dividends?ticker={symbol.upper()}"
 
     try:
