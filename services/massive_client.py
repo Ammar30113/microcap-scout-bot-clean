@@ -20,17 +20,19 @@ _MASSIVE_READY: bool = False
 _STOCKDATA_WARNING_EMITTED = False
 
 
-def load_massive_key() -> Optional[str]:
-    """Load Massive API key from env (supports MASSIVE_API_KEY and POLYGON_API_KEY)."""
+def load_massive_key() -> str:
+    """
+    Load Massive API key from env (supports MASSIVE_API_KEY and legacy POLYGON_API_KEY).
+    Raises RuntimeError when the key is missing.
+    """
 
     key = os.getenv("MASSIVE_API_KEY") or os.getenv("POLYGON_API_KEY")
     logger.info("MASSIVE_API_KEY detected: %s", bool(key))
 
     if not key:
         logger.error("❌ MASSIVE_API_KEY missing! Verify Railway environment variables.")
-        return None
+        raise RuntimeError("MASSIVE_API_KEY not found in environment variables.")
 
-    logger.info("✅ MASSIVE_API_KEY loaded successfully.")
     return key
 
 
@@ -57,26 +59,29 @@ def test_massive_connection(key: str) -> None:
     logger.warning("Response body: %s", response.text[:200])
 
 
-def _ensure_massive_ready() -> Optional[str]:
-    """Ensure the Massive API key is loaded and validated once."""
+def _ensure_massive_ready() -> str:
+    """
+    Ensure the Massive API key is loaded and validated once.
+    Returns the validated key or raises RuntimeError when unavailable/invalid.
+    """
 
     global _MASSIVE_API_KEY, _MASSIVE_READY
-    if _MASSIVE_API_KEY is None:
-        _MASSIVE_API_KEY = load_massive_key()
-    if not _MASSIVE_API_KEY:
-        return None
-    if not _MASSIVE_READY:
-        test_massive_connection(_MASSIVE_API_KEY)
-        _MASSIVE_READY = True
-    return _MASSIVE_API_KEY
+    if _MASSIVE_READY and _MASSIVE_API_KEY:
+        return _MASSIVE_API_KEY
+
+    key = load_massive_key()
+    test_massive_connection(key)
+    logger.info("✅ MASSIVE_API_KEY loaded successfully.")
+
+    _MASSIVE_API_KEY = key
+    _MASSIVE_READY = True
+    return key
 
 
-# Run validation at import time when a key exists, but allow startup without one.
-if load_massive_key():
-_INITIAL_KEY = load_massive_key()
-if _INITIAL_KEY:
-    _MASSIVE_API_KEY = _INITIAL_KEY
+try:
     _ensure_massive_ready()
+except RuntimeError:
+    logger.error("⚠️ massive_client - Unable to initialize Massive API key on startup")
 
 
 def get_massive_data(symbol: str) -> Optional[Dict[str, Any]]:
