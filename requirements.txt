@@ -8,3 +8,4 @@ pandas==2.1.3
 ta==0.11.0
 requests==2.31.0
 massive==2.0.1
+websockets==10.4
