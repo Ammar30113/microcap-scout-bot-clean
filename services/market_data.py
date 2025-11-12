@@ -36,6 +36,9 @@ async def get_market_snapshot(symbol: str) -> Dict[str, Any]:
     except Exception as exc:  # pragma: no cover - network guard
         logger.error("Massive API failed for %s: %s", target, exc)
 
+    if price is None:
+        price = await _get_alpaca_price_fallback(target)
+
     sentiment: Dict[str, Any] = {}
     news: List[Dict[str, Any]] = []
     try:
@@ -188,3 +191,39 @@ async def _log_universe_summary(symbols: List[str]) -> None:
 
     summary = summarize_universe(snapshots)
     logger.info("Universe sample summary: %s", summary)
+
+
+async def _get_alpaca_price_fallback(symbol: str) -> Optional[float]:
+    payload = await fetch_alpaca_latest_quote(symbol)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+
+    quote = data.get("quote") or data.get("latestQuote") or data
+    price = _extract_price_candidate(
+        quote.get("ap"),
+        quote.get("ask_price"),
+        quote.get("bp"),
+        quote.get("bid_price"),
+        quote.get("midpoint"),
+        quote.get("price"),
+        quote.get("p"),
+        quote.get("last"),
+        quote.get("c"),
+        data.get("price"),
+        data.get("close"),
+    )
+    if price is not None:
+        logger.info("%s price fallback supplied by Alpaca data API", symbol)
+    return price
+
+
+def _extract_price_candidate(*candidates: Any) -> Optional[float]:
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None

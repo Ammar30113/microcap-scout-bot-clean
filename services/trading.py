@@ -126,16 +126,72 @@ def _run_coro_sync(factory: Callable[[], Awaitable[Any]]) -> Any:
             asyncio.set_event_loop(None)
 
 
-def _get_latest_price(symbol: str) -> Optional[float]:
+def _get_latest_price(symbol: str, alpaca: Optional[tradeapi.REST] = None) -> Optional[float]:
     def _factory() -> Awaitable[Any]:
         return get_massive_quote(symbol)
 
     try:
         result = _run_coro_sync(_factory)
-        return float(result) if result is not None else None
+        if result is not None:
+            return float(result)
     except Exception as exc:  # pragma: no cover - defensive log
         logger.warning("Massive price lookup failed for %s: %s", symbol, exc)
+
+    fallback = _get_alpaca_fallback_price(symbol, alpaca)
+    if fallback is not None:
+        logger.info("%s price served via Alpaca fallback", symbol)
+    return fallback
+
+
+def _get_alpaca_fallback_price(symbol: str, alpaca: Optional[tradeapi.REST]) -> Optional[float]:
+    client = alpaca or _get_alpaca_client()
+    if client is None:
         return None
+
+    quote_price = _get_alpaca_quote_price(client, symbol)
+    if quote_price is not None:
+        return quote_price
+
+    try:
+        trade = client.get_latest_trade(symbol)
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("Alpaca trade fallback failed for %s: %s", symbol, exc)
+        return None
+
+    return _extract_numeric_price(
+        getattr(trade, "price", None),
+        getattr(trade, "p", None),
+        getattr(trade, "last_price", None),
+    )
+
+
+def _get_alpaca_quote_price(client: tradeapi.REST, symbol: str) -> Optional[float]:
+    try:
+        quote = client.get_latest_quote(symbol)
+    except Exception as exc:  # pragma: no cover - network
+        logger.warning("Alpaca quote fallback failed for %s: %s", symbol, exc)
+        return None
+
+    return _extract_numeric_price(
+        getattr(quote, "ap", None),
+        getattr(quote, "ask_price", None),
+        getattr(quote, "bp", None),
+        getattr(quote, "bid_price", None),
+        getattr(quote, "midpoint", None),
+        getattr(quote, "p", None),
+        getattr(quote, "price", None),
+    )
+
+
+def _extract_numeric_price(*candidates: Any) -> Optional[float]:
+    for value in candidates:
+        try:
+            if value is None:
+                continue
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def get_account_cash(alpaca: tradeapi.REST) -> float:
@@ -209,7 +265,7 @@ def maybe_trade(symbol: str, confidence: Optional[float] = None) -> bool:
         _record_action(symbol, "skipped", msg, {"cash": cash})
         return True
 
-    entry_price = _get_latest_price(symbol)
+    entry_price = _get_latest_price(symbol, alpaca)
     if entry_price is None:
         msg = "No price data"
         logger.info("%s skipped - %s (cash %.2f)", symbol, msg, cash_balance or 0.0)
