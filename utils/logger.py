@@ -14,10 +14,7 @@ def configure_logging(level: int = logging.INFO) -> logging.Logger:
         return logger
 
     handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = logging.Formatter("[%(levelname)s] [%(name)s] %(message)s")
     handler.setFormatter(formatter)
 
     logger.setLevel(level)
