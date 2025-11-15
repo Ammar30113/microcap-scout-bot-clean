@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Dict, List
+
+import requests
+
+from core.config import Settings
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+class AlpacaProvider:
+    """Market data provider backed by the Alpaca data API."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.base_url = settings.alpaca_data_url.rstrip("/")
+        self.api_key = settings.alpaca_api_key
+        self.api_secret = settings.alpaca_api_secret
+        if not self.api_key or not self.api_secret:
+            logger.warning("AlpacaProvider missing credentials; calls will fail until configured")
+
+    def _headers(self) -> Dict[str, str]:
+        return {"APCA-API-KEY-ID": self.api_key, "APCA-API-SECRET-KEY": self.api_secret}
+
+    def get_price(self, symbol: str) -> float:
+        url = f"{self.base_url}/stocks/{symbol.upper()}/trades/latest"
+        response = requests.get(url, headers=self._headers(), timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        trade = payload.get("trade")
+        if not trade:
+            raise RuntimeError("Alpaca trade response missing payload")
+        return float(trade["p"])
+
+    def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
+        timeframe = self._normalize_timespan(timespan)
+        url = f"{self.base_url}/stocks/{symbol.upper()}/bars"
+        params = {"timeframe": timeframe, "limit": limit, "adjustment": "split"}
+        response = requests.get(url, headers=self._headers(), params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json().get("bars", [])
+        return [self._normalize_bar(item) for item in data]
+
+    def _normalize_timespan(self, timespan: str) -> str:
+        mapping = {"1day": "1Day", "1hour": "1Hour", "1min": "1Min"}
+        return mapping.get(timespan.lower(), "1Day")
+
+    def _normalize_bar(self, bar: Dict[str, float]) -> Dict[str, float]:
+        return {
+            "open": float(bar["o"]),
+            "high": float(bar["h"]),
+            "low": float(bar["l"]),
+            "close": float(bar["c"]),
+            "volume": float(bar["v"]),
+            "timestamp": datetime.fromisoformat(bar["t"].replace("Z", "+00:00")).timestamp(),
+        }

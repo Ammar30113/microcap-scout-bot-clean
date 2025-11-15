@@ -1,62 +1,96 @@
+from __future__ import annotations
+
 import asyncio
-import os
+import math
 
-from fastapi import FastAPI
+import pandas as pd
 
-from routes.health import router as health_router
-from routes.products import router as products_router
-from services.market_data import get_daily_universe
-from services.trading import daily_summary, maybe_trade
-from utils.logger import configure_logging
-from utils.settings import get_settings
+from core.config import get_settings
+from core.logger import get_logger
+from core.scheduler import Scheduler
+from data.finnhub_sentiment import fetch_sentiment as fetch_finnhub_sentiment
+from data.newsapi_sentiment import fetch_sentiment as fetch_news_sentiment
+from data.price_router import PriceRouter
+from strategy.etf_arbitrage import generate_signals as generate_arbitrage_signals
+from strategy.ml_classifier import MLClassifier
+from strategy.signal_router import SignalRouter
+from trader.order_executor import OrderExecutor
+from universe.universe_builder import build_universe
 
-logger = configure_logging()
-
+logger = get_logger(__name__)
 settings = get_settings()
-STRATEGY_INTERVAL_SECONDS = int(os.getenv("STRATEGY_INTERVAL_SECONDS", 24 * 60 * 60))
-_strategy_task: asyncio.Task | None = None
-
-app = FastAPI(
-    title="Microcap Scout Bot",
-    description="Microcap Scout Bot - clean FastAPI rebuild with Finviz, Massive, Finnhub, Alpaca, and hybrid trade logic.",
-    version="0.2.0",
-    contact={"name": "Microcap Scout Bot", "url": "https://github.com/Ammar30113/microcap-scout-bot-clean"},
-)
+price_router = PriceRouter()
+ml_model = MLClassifier()
+signal_router = SignalRouter(ml_model)
+order_executor = OrderExecutor()
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    global _strategy_task
-    logger.info("Starting Microcap Scout Bot in %s mode", settings.environment)
-    if _strategy_task is None or _strategy_task.done():
-        _strategy_task = asyncio.create_task(_run_daily_strategy())
-    else:
-        logger.info("Strategy task already running; skipping reinitialization")
+async def run_trading_cycle() -> None:
+    logger.info("Building universe")
+    universe_df = build_universe()
+    if universe_df.empty:
+        logger.warning("Universe is empty; skipping run")
+        return
 
+    try:
+        etf_reference = PriceRouter.aggregates_to_dataframe(price_router.get_aggregates("IWM", settings.default_timespan, 120))
+    except Exception as exc:
+        logger.warning("Unable to fetch ETF reference data: %s", exc)
+        etf_reference = pd.DataFrame()
 
-async def _run_daily_strategy() -> None:
-    """
-    Build the daily universe and execute potential trades without blocking the main loop.
-    """
-    while True:
+    arbitrage_map = generate_arbitrage_signals(price_router.get_aggregates)
+
+    executed = 0
+    evaluated = 0
+    for _, row in universe_df.iterrows():
+        symbol = row["symbol"]
+        evaluated += 1
         try:
-            symbols = await get_daily_universe()
-        except Exception as exc:  # pragma: no cover - defensive log
-            logger.exception("Unable to build daily universe: %s", exc)
-        else:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, _trade_sync, symbols)
-            await loop.run_in_executor(None, daily_summary)
+            bars = price_router.get_aggregates(symbol, settings.default_timespan, 120)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Aggregates unavailable for %s: %s", symbol, exc)
+            continue
+        price_frame = PriceRouter.aggregates_to_dataframe(bars)
+        if price_frame.empty:
+            continue
 
-        await asyncio.sleep(STRATEGY_INTERVAL_SECONDS)
+        sentiments = {
+            "finnhub": fetch_finnhub_sentiment(symbol),
+            "newsapi": fetch_news_sentiment(symbol),
+        }
+        try:
+            liquidity_hint = float(row.get("avg_volume", 0.0)) / 1_000_000.0
+        except (TypeError, ValueError):
+            liquidity_hint = 0.0
+        if math.isnan(liquidity_hint):
+            liquidity_hint = 0.0
+        decision = signal_router.evaluate_symbol(
+            symbol,
+            price_frame,
+            etf_reference,
+            sentiments,
+            arbitrage_map,
+            liquidity_hint,
+        )
+        if decision["action"] == "HOLD":
+            continue
+
+        try:
+            decision["price"] = price_router.get_price(symbol)
+        except Exception:
+            decision["price"] = float(price_frame["close"].iloc[-1])
+
+        order_executor.execute(decision)
+        executed += 1
+
+    logger.info("Cycle complete — evaluated %s symbols, executed %s trades", evaluated, executed)
 
 
-def _trade_sync(symbols: list[str]) -> None:
-    for symbol in symbols:
-        should_continue = maybe_trade(symbol)
-        if not should_continue:
-            break
+def main() -> None:
+    scheduler = Scheduler()
+    scheduler.register("microcap-cycle", run_trading_cycle, settings.scheduler_interval_seconds)
+    asyncio.run(scheduler.start())
 
 
-app.include_router(health_router)
-app.include_router(products_router)
+if __name__ == "__main__":
+    main()

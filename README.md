@@ -1,109 +1,60 @@
-# Microcap Scout Bot (Clean FastAPI Rebuild)
+# Microcap Scout Bot — ML + Multi-Provider Trading Engine
 
-Microcap Scout Bot is a FastAPI-based backend that aggregates data from Finviz, Massive, Finnhub, and Alpaca to power microcap-focused scouting tools. This repo is a clean rebuild of the previous app, aligned with the confirmed architecture and deployment targets (Railway + Docker).
+This repository contains a from-scratch rewrite of the Microcap Scout Bot. The new system discards the legacy dependencies and introduces an AI-driven, multi-provider market data and trading stack tuned for Railway deployments.
 
-## Features
-- FastAPI app with `uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}` (Railway/Heroku set `PORT` automatically).
-- `/` health and `/products.json` catalog endpoints stay stable while exposing the latest universe + trade log.
-- Hybrid scanner merges Finviz microcaps with filtered large caps (AAPL, NVDA, TSLA, etc.) and runs daily.
-- Trading engine uses Alpaca bracket orders (8% TP / 4% SL) with utilization guardrails, Massive-powered pricing, and a $10k configurable daily budget allocator plus end-of-day summaries.
-- Service layer integrates Finviz, Massive, Finnhub, and Alpaca, backed by in-memory caching and throttling.
-- Environment-driven configuration with `.env.example`, Dockerfile + Procfile for Railway.
+## Highlights
+- **Market data router** prioritizes Alpaca → Polygon → TwelveData → AlphaVantage with automatic failover.
+- **Universe engine** expands ETF constituents (IWM, IWC, SMLF, VTWO, URTY), filters on market-cap, price, and liquidity, and can fall back to a bundled CSV snapshot.
+- **ML classifier** (XGBoost) scores upside probability using momentum, volatility, sentiment, liquidity, and ETF-relative strength inputs backed by the bundled `models/microcap_model.pkl` file.
+- **Strategies**: momentum breakout, mean-reversion snapback, and ETF/semiconductor arbitrage pairs, all merged via a signal router that enforces ATR-based take-profit/stop-loss targets.
+- **Trader engine**: allocation, risk limits (max 10% position / 3% daily loss), Alpaca bracket orders, and persisted portfolio state.
 
-## Project Structure
+## Repository Layout
 ```
-.
-├── Dockerfile
-├── Procfile
-├── README.md
-├── main.py
-├── requirements.txt
-├── routes/
-│   ├── __init__.py
-│   ├── health.py
-│   └── products.py
-├── services/
-│   ├── __init__.py
-│   ├── alpaca.py
-│   ├── finnhub_client.py
-│   ├── finviz.py
-│   ├── market_data.py
-│   ├── massive_client.py
-│   └── trading.py
-├── utils/
-│   ├── __init__.py
-│   ├── http_client.py
-│   ├── logger.py
-│   └── settings.py
-└── .env.example
+microcap-scout-bot/
+├── core/                # configuration, logging, scheduler utilities
+├── data/                # market-data providers + sentiment clients + price router
+├── universe/            # ETF expansion, CSV fallback, and microcap filtering
+├── strategy/            # ML classifier + trading strategies + signal router
+├── trader/              # allocation, risk, order execution, and portfolio state
+├── models/              # microcap_model.pkl placeholder (trained on mock data)
+├── main.py              # orchestrates the full pipeline + scheduler
+└── requirements.txt
 ```
 
-## Getting Started
+## Environment Variables
+Set the following variables inside Railway (or a local `.env` file – the project loads them via `python-dotenv`):
 
-### 1. Requirements
-- Python 3.11+
-- pip / venv (recommended)
+| Variable | Description |
+|----------|-------------|
+| `APCA_API_KEY_ID` / `ALPACA_API_KEY` | Alpaca trading/data key |
+| `APCA_API_SECRET_KEY` / `ALPACA_API_SECRET` | Alpaca secret |
+| `ALPACA_API_BASE_URL` | Default `https://paper-api.alpaca.markets` |
+| `ALPACA_API_DATA_URL` | Default `https://data.alpaca.markets/v2` |
+| `POLYGON_API_KEY` | Required for ETF holdings + fundamentals |
+| `TWELVEDATA_API_KEY` | Optional fallback data |
+| `ALPHAVANTAGE_API_KEY` | Optional fallback data |
+| `FINNHUB_API_KEY` | Sentiment + news scores |
+| `NEWSAPI_KEY` | Headline sentiment |
+| `MICROCAP_ETFS` | Comma-separated ETF tickers (default `IWM,IWC,SMLF,VTWO,URTY`) |
+| `INITIAL_EQUITY` | Portfolio equity baseline (default 100000) |
+| `MAX_POSITION_PCT` | Position cap per trade (default 0.10) |
+| `MAX_DAILY_LOSS_PCT` | Risk guardrails (default 0.03) |
+| `SCHEDULER_INTERVAL_SECONDS` | Re-run cadence (default 900) |
 
-### 2. Install dependencies
+## Running Locally
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### 3. Configure environment variables
-Copy the sample file and edit with real API credentials:
-```bash
-cp .env.example .env
-# edit .env
-```
-
-Required keys:
-- `FINVIZ_TOKEN` (Finviz screener)
-- `MASSIVE_API_KEY`
-- `FINNHUB_API_KEY`
-- `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`
-- `APCA_API_BASE_URL`, `APCA_API_DATA_URL` (leave off `/v2`; the SDK appends it automatically)
-- `TRADING_BUDGET` (e.g., `1000`) and `DAILY_BUDGET_USD` (defaults to `10000`)
-
-Optional overrides: `ALPACA_BASE_URL`, `DEFAULT_SYMBOL`, `ENVIRONMENT`, `PORT`, `MODE`.
-
-### 4. Run the app locally
-```bash
-uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
-```
-
-Health check:
-```bash
-curl http://127.0.0.1:8000/
-```
-
-Product schema:
-```bash
-curl http://127.0.0.1:8000/products.json
-```
-
-## Docker Workflow
-```bash
-docker build -t microcap-scout-bot .
-docker run --env-file .env -p 8000:8000 microcap-scout-bot
+python main.py
 ```
 
 ## Railway Deployment
-1. Create a new Railway project and attach this repo.
-2. In the Railway dashboard, set the environment variables from `.env.example`.
-3. Railway detects the `Dockerfile` or `Procfile`. The Procfile command (`sh -c 'uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}'`) respects Railway’s `PORT` env or defaults to 8000 locally.
-4. Deploy. The health route (`/`) is ideal for Railway health checks.
+1. Attach this repo to Railway and select the Python/Docker buildpack.
+2. Paste the required environment variables in the Railway dashboard (Bulk Edit recommended).
+3. Railway executes `python main.py` which boots the scheduler, builds the universe, generates ML signals, and routes orders through Alpaca.
 
-## API Overview
-| Method | Route           | Description                                        |
-|--------|-----------------|----------------------------------------------------|
-| GET    | `/`             | Health/status ping                                 |
-| HEAD   | `/`             | Head-only health                                   |
-| GET    | `/products.json`| Product catalog + blended data + universe + trades |
-
-## Next Steps
-- Persist trade logs/universe snapshots in a backing store (Redis/Postgres) for inspection.
-- Run the hybrid strategy on a scheduled worker (Celery/Temporal) instead of app startup.
-- Wire the trading signals into your Discord/Telegram bots for real-time pushes.
+## Notes
+- The bundled ML model ships as a placeholder trained on synthetic data. For production, retrain `models/microcap_model.pkl` with historical features + outcomes.
+- The ETF arbitrage engine currently tracks IWM/URTY, AMD/SMH, and NVDA/SOXX. Extend `strategy/etf_arbitrage.py` if additional pairs are required.
