@@ -8,7 +8,6 @@ from core.config import get_settings
 from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
-from data.polygon_provider import PolygonProvider
 from data.twelvedata_provider import TwelveDataProvider
 
 logger = get_logger(__name__)
@@ -21,7 +20,6 @@ class PriceRouter:
     def __init__(self) -> None:
         self.providers: Sequence[object] = (
             AlpacaProvider(settings),
-            PolygonProvider(settings.polygon_api_key),
             TwelveDataProvider(settings.twelvedata_api_key),
             AlphaVantageProvider(settings.alphavantage_api_key),
         )

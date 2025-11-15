@@ -22,7 +22,6 @@ class Settings:
     alpaca_base_url: str = field(default_factory=lambda: os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets"))
     alpaca_data_url: str = field(default_factory=lambda: os.getenv("ALPACA_API_DATA_URL", "https://data.alpaca.markets/v2"))
 
-    polygon_api_key: str = field(default_factory=lambda: os.getenv("POLYGON_API_KEY", ""))
     twelvedata_api_key: str = field(default_factory=lambda: os.getenv("TWELVEDATA_API_KEY") or os.getenv("TWELVEDATA_KEY", ""))
     alphavantage_api_key: str = field(
         default_factory=lambda: os.getenv("ALPHAVANTAGE_API_KEY")

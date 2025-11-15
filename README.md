@@ -3,7 +3,7 @@
 This repository contains a from-scratch rewrite of the Microcap Scout Bot. The new system discards the legacy dependencies and introduces an AI-driven, multi-provider market data and trading stack tuned for Railway deployments.
 
 ## Highlights
-- **Market data router** prioritizes Alpaca → Polygon → TwelveData → AlphaVantage with automatic failover.
+- **Market data router** prioritizes Alpaca → TwelveData → AlphaVantage with automatic failover.
 - **Universe engine** expands ETF constituents (IWM, IWC, SMLF, VTWO, URTY), filters on market-cap, price, and liquidity, and can fall back to a bundled CSV snapshot.
 - **ML classifier** (XGBoost) scores upside probability using momentum, volatility, sentiment, liquidity, and ETF-relative strength inputs backed by the bundled `models/microcap_model.pkl` file.
 - **Strategies**: momentum breakout, mean-reversion snapback, and ETF/semiconductor arbitrage pairs, all merged via a signal router that enforces ATR-based take-profit/stop-loss targets.
@@ -31,7 +31,6 @@ Set the following variables inside Railway (or a local `.env` file – the proje
 | `APCA_API_SECRET_KEY` / `ALPACA_API_SECRET` | Alpaca secret |
 | `ALPACA_API_BASE_URL` | Default `https://paper-api.alpaca.markets` |
 | `ALPACA_API_DATA_URL` | Default `https://data.alpaca.markets/v2` |
-| `POLYGON_API_KEY` | Required for ETF holdings + fundamentals |
 | `TWELVEDATA_API_KEY` | Optional fallback data |
 | `ALPHAVANTAGE_API_KEY` | Optional fallback data |
 | `FINNHUB_API_KEY` | Sentiment + news scores |
