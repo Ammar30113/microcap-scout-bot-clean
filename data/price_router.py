@@ -4,25 +4,43 @@ from typing import Dict, List, Sequence
 
 import pandas as pd
 
+from core.config import get_settings
 from core.logger import get_logger
 from data.alpaca_provider import AlpacaProvider
 from data.alphavantage_provider import AlphaVantageProvider
 from data.twelvedata_provider import TwelveDataProvider
 
 logger = get_logger(__name__)
+settings = get_settings()
 
-PROVIDERS: Sequence[object] = [
-    AlpacaProvider(),
-    TwelveDataProvider(),
-    AlphaVantageProvider(),
-]
+
+def _build_providers() -> Sequence[object]:
+    providers: list[object] = []
+    # Prefer non-Alpaca first to reduce rate-limit exposure
+    if settings.alphavantage_api_key:
+        providers.append(AlphaVantageProvider())
+    else:
+        logger.info("PriceRouter: AlphaVantage disabled (missing ALPHAVANTAGE_API_KEY)")
+
+    if settings.twelvedata_api_key:
+        providers.append(TwelveDataProvider())
+    else:
+        logger.info("PriceRouter: TwelveData disabled (missing TWELVEDATA_API_KEY)")
+
+    if settings.alpaca_api_key and settings.alpaca_api_secret:
+        providers.append(AlpacaProvider())
+    else:
+        logger.info("PriceRouter: Alpaca disabled (missing API credentials)")
+
+    logger.info("PriceRouter active providers: %s", [p.__class__.__name__ for p in providers])
+    return providers
 
 
 class PriceRouter:
     """Funnel price + aggregate requests across multiple providers."""
 
     def __init__(self) -> None:
-        self.providers = PROVIDERS
+        self.providers = _build_providers()
 
     def get_price(self, symbol: str) -> float:
         last_error: Exception | None = None
@@ -32,6 +50,8 @@ class PriceRouter:
             except Exception as exc:  # pragma: no cover - network guard
                 provider_name = provider.__class__.__name__
                 logger.warning("%s price lookup failed for %s: %s", provider_name, symbol, exc)
+                if "429" in str(exc):
+                    logger.warning("%s rate limited for %s; skipping", provider_name, symbol)
                 last_error = exc
         raise RuntimeError(f"All providers failed to return price for {symbol}") from last_error
 
@@ -45,6 +65,8 @@ class PriceRouter:
             except Exception as exc:  # pragma: no cover - network guard
                 provider_name = provider.__class__.__name__
                 logger.warning("%s aggregates failed for %s: %s", provider_name, symbol, exc)
+                if "429" in str(exc):
+                    logger.warning("%s rate limited for %s; skipping", provider_name, symbol)
                 last_error = exc
         raise RuntimeError(f"All providers failed to return aggregates for {symbol}") from last_error
 

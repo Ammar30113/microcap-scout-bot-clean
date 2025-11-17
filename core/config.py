@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -56,4 +59,6 @@ def get_settings() -> Settings:
         settings.microcap_etfs = ["IWM", "IWC", "SMLF", "VTWO", "URTY"]
     settings.universe_fallback_csv.parent.mkdir(parents=True, exist_ok=True)
     settings.portfolio_state_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
+    logger.info("ALPHAVANTAGE_API_KEY detected: %s", bool(settings.alphavantage_api_key))
     return settings
