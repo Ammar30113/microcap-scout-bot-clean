@@ -46,12 +46,15 @@ class PriceRouter:
         last_error: Exception | None = None
         for provider in self.providers:
             try:
-                return provider.get_price(symbol)  # type: ignore[attr-defined]
+                price = provider.get_price(symbol)  # type: ignore[attr-defined]
+                if price is None:
+                    continue
+                return price
             except Exception as exc:  # pragma: no cover - network guard
                 provider_name = provider.__class__.__name__
                 logger.warning("%s price lookup failed for %s: %s", provider_name, symbol, exc)
                 if "429" in str(exc):
-                    logger.warning("%s rate limited for %s; skipping", provider_name, symbol)
+                    logger.warning("Rate limit hit on %s, skipping %s", provider_name, symbol)
                 last_error = exc
         raise RuntimeError(f"All providers failed to return price for {symbol}") from last_error
 
@@ -60,13 +63,15 @@ class PriceRouter:
         for provider in self.providers:
             try:
                 bars = provider.get_aggregates(symbol, timespan, limit)  # type: ignore[attr-defined]
+                if not bars:
+                    continue
                 if bars:
                     return bars
             except Exception as exc:  # pragma: no cover - network guard
                 provider_name = provider.__class__.__name__
                 logger.warning("%s aggregates failed for %s: %s", provider_name, symbol, exc)
                 if "429" in str(exc):
-                    logger.warning("%s rate limited for %s; skipping", provider_name, symbol)
+                    logger.warning("Rate limit hit on %s, skipping %s", provider_name, symbol)
                 last_error = exc
         raise RuntimeError(f"All providers failed to return aggregates for {symbol}") from last_error
 

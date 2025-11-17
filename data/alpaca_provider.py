@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -25,24 +25,36 @@ class AlpacaProvider:
     def _headers(self) -> Dict[str, str]:
         return {"APCA-API-KEY-ID": self.api_key, "APCA-API-SECRET-KEY": self.api_secret}
 
-    def get_price(self, symbol: str) -> float:
+    def get_price(self, symbol: str) -> Optional[float]:
+        if not self.api_key or not self.api_secret:
+            return None
         url = f"{self.base_url}/stocks/{symbol.upper()}/trades/latest"
-        response = requests.get(url, headers=self._headers(), timeout=10)
-        response.raise_for_status()
-        payload = response.json()
-        trade = payload.get("trade")
-        if not trade:
-            raise RuntimeError("Alpaca trade response missing payload")
-        return float(trade["p"])
+        try:
+            response = requests.get(url, headers=self._headers(), timeout=10)
+            response.raise_for_status()
+            payload = response.json()
+            trade = payload.get("trade")
+            if not trade:
+                return None
+            return float(trade.get("p", 0.0))
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Alpaca price fetch failed for %s: %s", symbol, exc)
+            return None
 
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
+        if not self.api_key or not self.api_secret:
+            return []
         timeframe = self._normalize_timespan(timespan)
         url = f"{self.base_url}/stocks/{symbol.upper()}/bars"
         params = {"timeframe": timeframe, "limit": limit, "adjustment": "split"}
-        response = requests.get(url, headers=self._headers(), params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json().get("bars", [])
-        return [self._normalize_bar(item) for item in data]
+        try:
+            response = requests.get(url, headers=self._headers(), params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json().get("bars", []) or []
+            return [self._normalize_bar(item) for item in data]
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("Alpaca aggregates failed for %s: %s", symbol, exc)
+            return []
 
     def _normalize_timespan(self, timespan: str) -> str:
         mapping = {"1day": "1Day", "1hour": "1Hour", "1min": "1Min"}

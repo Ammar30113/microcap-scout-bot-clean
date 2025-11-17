@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict
 
@@ -21,15 +21,18 @@ DEFAULT_STATE = {
 
 def load_state(path: Path, settings: Settings) -> Dict[str, Any]:
     if not path.exists():
-        state = {**DEFAULT_STATE, "equity": settings.initial_equity, "positions": []}
-        save_state(path, state)
-        return state
+        return reset_state(path, settings, warn=True)
     try:
         with path.open("r", encoding="utf-8") as handle:
             state = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Portfolio state corrupted: %s", exc)
-        state = {**DEFAULT_STATE, "equity": settings.initial_equity, "positions": []}
+        logger.warning("Portfolio state unreadable — resetting.")
+        state = reset_state(path, settings, warn=False)
+        return state
+    if not isinstance(state, dict) or not state:
+        logger.warning("Portfolio state unreadable — resetting.")
+        state = reset_state(path, settings, warn=False)
+        return state
     ensure_today_state(state, settings)
     return state
 
@@ -49,6 +52,14 @@ def ensure_today_state(state: Dict[str, Any], settings: Settings) -> None:
         state["positions"] = []
 
 
+def reset_state(path: Path, settings: Settings, warn: bool = False) -> Dict[str, Any]:
+    if warn:
+        logger.warning("Portfolio state unreadable — resetting.")
+    state = {"positions": {}, "last_updated": datetime.utcnow().isoformat()}
+    save_state(path, state)
+    return state
+
+
 def record_trade(
     state: Dict[str, Any],
     symbol: str,
@@ -65,5 +76,7 @@ def record_trade(
         "confidence": confidence,
     }
     positions = state.setdefault("positions", [])
+    if isinstance(positions, dict):
+        positions = state["positions"] = []
     positions.append(trade)
     logger.info("Recorded trade %s", trade)

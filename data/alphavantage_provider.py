@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -20,21 +20,33 @@ class AlphaVantageProvider:
         if not self.api_key:
             logger.warning("AlphaVantageProvider initialized without API key")
 
-    def get_price(self, symbol: str) -> float:
+    def get_price(self, symbol: str) -> Optional[float]:
+        if not self.api_key:
+            return None
         params = {"function": "GLOBAL_QUOTE", "symbol": symbol.upper(), "apikey": self.api_key}
-        response = requests.get(self.BASE_URL, params=params, timeout=10)
-        response.raise_for_status()
-        payload = response.json().get("Global Quote", {})
-        price = payload.get("05. price")
-        if price is None:
-            raise RuntimeError("AlphaVantage quote missing price")
-        return float(price)
+        try:
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            payload = response.json().get("Global Quote", {})
+            price = payload.get("05. price")
+            if price is None:
+                return None
+            return float(price)
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("AlphaVantage price fetch failed for %s: %s", symbol, exc)
+            return None
 
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
+        if not self.api_key:
+            return []
         params = {"function": "TIME_SERIES_DAILY_ADJUSTED", "symbol": symbol.upper(), "apikey": self.api_key}
-        response = requests.get(self.BASE_URL, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json().get("Time Series (Daily)", {})
+        try:
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json().get("Time Series (Daily)", {}) or {}
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("AlphaVantage aggregates failed for %s: %s", symbol, exc)
+            return []
         normalized: List[Dict[str, float]] = []
         for date_str, values in list(data.items())[:limit]:
             normalized.append(

@@ -79,9 +79,33 @@ def execute_trades(allocations):
 
 def close_position(symbol: str) -> None:
     try:
+        positions = {pos.symbol: pos for pos in trading_client.get_all_positions()}
+    except Exception as exc:  # pragma: no cover - network guard
+        logger.warning("Unable to fetch positions before exit: %s", exc)
+        return
+
+    pos = positions.get(symbol)
+    if not pos:
+        logger.info("No open position for %s; skipping close", symbol)
+        return
+    try:
+        qty = float(pos.qty)
+        held = float(getattr(pos, "held_for_orders", 0) or 0)
+    except Exception:
+        qty = 0.0
+        held = 0.0
+
+    if qty <= 0 or held >= qty:
+        logger.warning("Skipping exit for %s: qty=%s held_for_orders=%s", symbol, qty, held)
+        return
+
+    try:
         trading_client.close_position(symbol)
         logger.info("Closed position for %s", symbol)
     except Exception as exc:  # pragma: no cover - network guard
+        if "insufficient qty" in str(exc).lower():
+            logger.warning("Skip exit for %s: qty unavailable.", symbol)
+            return
         logger.warning("Failed to close position for %s: %s", symbol, exc)
 
 

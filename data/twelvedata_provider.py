@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import requests
 
@@ -22,16 +22,24 @@ class TwelveDataProvider:
         if not self.api_key:
             logger.warning("TwelveDataProvider initialized without API key")
 
-    def get_price(self, symbol: str) -> float:
+    def get_price(self, symbol: str) -> Optional[float]:
+        if not self.api_key:
+            return None
         params = {"symbol": symbol.upper(), "apikey": self.api_key, "interval": "1min", "outputsize": 1}
-        response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
-        response.raise_for_status()
-        values = response.json().get("values", [])
-        if not values:
-            raise RuntimeError("TwelveData returned empty payload")
-        return float(values[0]["close"])
+        try:
+            response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            response.raise_for_status()
+            values = response.json().get("values", [])
+            if not values:
+                return None
+            return float(values[0].get("close", 0.0))
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("TwelveData price fetch failed for %s: %s", symbol, exc)
+            return None
 
     def get_aggregates(self, symbol: str, timespan: str = "1day", limit: int = 60) -> List[Dict[str, float]]:
+        if not self.api_key:
+            return []
         interval = self._normalize_timespan(timespan)
         params = {
             "symbol": symbol.upper(),
@@ -39,9 +47,13 @@ class TwelveDataProvider:
             "apikey": self.api_key,
             "outputsize": limit,
         }
-        response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
-        response.raise_for_status()
-        values = response.json().get("values", [])
+        try:
+            response = requests.get(f"{self.BASE_URL}/time_series", params=params, timeout=10)
+            response.raise_for_status()
+            values = response.json().get("values", []) or []
+        except Exception as exc:  # pragma: no cover - network guard
+            logger.warning("TwelveData aggregates failed for %s: %s", symbol, exc)
+            return []
         normalized: List[Dict[str, float]] = []
         for row in reversed(values):  # API returns newest first
             normalized.append(
