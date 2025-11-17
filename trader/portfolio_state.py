@@ -33,6 +33,12 @@ def load_state(path: Path, settings: Settings) -> Dict[str, Any]:
         logger.warning("Portfolio state unreadable — resetting.")
         state = reset_state(path, settings, warn=False)
         return state
+    if "positions" not in state or not isinstance(state.get("positions"), dict):
+        state = reset_state(path, settings, warn=True)
+    elif any(sym and not str(sym).isalnum() for sym in state.get("positions", {}).keys()):
+        state = reset_state(path, settings, warn=True)
+    elif len(state.get("positions", {})) == 0:
+        logger.info("Portfolio empty — clean state confirmed.")
     ensure_today_state(state, settings)
     return state
 
