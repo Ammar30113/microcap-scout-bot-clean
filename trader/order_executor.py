@@ -12,16 +12,23 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 price_router = PriceRouter()
 
-trading_client = TradingClient(
-    settings.alpaca_api_key,
-    settings.alpaca_api_secret,
-    paper="paper" in settings.alpaca_base_url,
-)
+if settings.alpaca_api_key and settings.alpaca_api_secret:
+    trading_client = TradingClient(
+        settings.alpaca_api_key,
+        settings.alpaca_api_secret,
+        paper="paper" in settings.alpaca_base_url,
+    )
+else:
+    trading_client = None
+    logger.warning("Alpaca credentials missing; trading operations will be skipped.")
 
 
 def execute_trades(allocations):
     if not allocations:
         logger.info("No allocations to trade")
+        return
+    if trading_client is None:
+        logger.warning("Trading client unavailable; cannot execute trades. Check Alpaca API keys.")
         return
 
     try:
@@ -78,6 +85,9 @@ def execute_trades(allocations):
 
 
 def close_position(symbol: str) -> None:
+    if trading_client is None:
+        logger.warning("Trading client unavailable; cannot close position for %s", symbol)
+        return
     try:
         positions = {pos.symbol: pos for pos in trading_client.get_all_positions()}
     except Exception as exc:  # pragma: no cover - network guard
@@ -110,6 +120,9 @@ def close_position(symbol: str) -> None:
 
 
 def list_positions():
+    if trading_client is None:
+        logger.warning("Trading client unavailable; cannot list positions.")
+        return []
     try:
         return trading_client.get_all_positions()
     except Exception as exc:  # pragma: no cover - network guard

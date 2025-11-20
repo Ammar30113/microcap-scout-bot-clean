@@ -9,12 +9,18 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
+_FINNHUB_DISABLED_REASON: str | None = None
 
 
 def fetch_sentiment(symbol: str) -> float:
     """Return Finnhub sentiment score for ``symbol`` (0-1 range)."""
 
+    global _FINNHUB_DISABLED_REASON
+
     if not settings.finnhub_api_key:
+        return 0.0
+
+    if _FINNHUB_DISABLED_REASON:
         return 0.0
 
     url = "https://finnhub.io/api/v1/news-sentiment"
@@ -23,6 +29,15 @@ def fetch_sentiment(symbol: str) -> float:
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
     except requests.HTTPError as exc:  # pragma: no cover - network guard
+        status = exc.response.status_code if exc.response is not None else None
+        if status in (401, 403):
+            if _FINNHUB_DISABLED_REASON is None:
+                _FINNHUB_DISABLED_REASON = f"Finnhub sentiment disabled after HTTP {status}; check FINNHUB_API_KEY"
+                logger.warning(_FINNHUB_DISABLED_REASON)
+        else:
+            logger.warning("Finnhub sentiment request failed for %s: %s", symbol, exc)
+        return 0.0
+    except requests.RequestException as exc:  # pragma: no cover - network guard
         logger.warning("Finnhub sentiment request failed for %s: %s", symbol, exc)
         return 0.0
 
