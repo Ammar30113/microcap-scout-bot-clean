@@ -18,7 +18,9 @@ def compute_vwap(df: pd.DataFrame) -> pd.Series:
     return dollar_volume / cumulative_volume
 
 
-def passes_entry_filter(df: pd.DataFrame) -> bool:
+def passes_entry_filter(df: pd.DataFrame, crash_mode: bool = False) -> bool:
+    if crash_mode:
+        return True
     if df is None or df.empty or len(df) < 20:
         return False
 
@@ -94,3 +96,9 @@ def atr_bands(df: pd.DataFrame, multiplier: float = 1.5, window: int = 14):
     upper = mid + multiplier * atr
     lower = mid - multiplier * atr
     return mid, upper, lower, atr
+
+
+def relaxed_entry_filter(df: pd.DataFrame) -> bool:
+    """Always allow entries (used for crash mode override)."""
+
+    return True

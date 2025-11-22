@@ -9,15 +9,24 @@ price_router = PriceRouter()
 DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
 
 
-def allocate_positions(final_signals):
+def allocate_positions(final_signals, crash_mode: bool = False):
     if not final_signals:
         logger.warning("No signals to allocate capital")
         return {}
 
-    budget_remaining = DAILY_BUDGET
-    base_allocation = DAILY_BUDGET / 3
+    if crash_mode:
+        max_positions = 3
+        budget_remaining = DAILY_BUDGET * 0.80
+        base_allocation = budget_remaining / max_positions
+    else:
+        budget_remaining = DAILY_BUDGET
+        base_allocation = DAILY_BUDGET / 3
+
     allocations = {}
     for signal in final_signals:
+        if crash_mode and len(allocations) >= 3:
+            logger.info("Crash mode: max positions reached")
+            break
         symbol = signal["symbol"] if isinstance(signal, dict) else signal
         signal_type = signal.get("type") if isinstance(signal, dict) else "momentum"
         vol_ratio = float(signal.get("vol_ratio", 1.0) if isinstance(signal, dict) else 1.0)
@@ -29,13 +38,20 @@ def allocate_positions(final_signals):
             continue
 
         size = base_allocation
-        if vol_ratio > 1.5:
-            size *= 0.5
-        elif vol_ratio < 0.7:
-            size = min(base_allocation, base_allocation * 1.3)
-
-        if signal_type == "reversal":
-            size *= 0.6
+        if crash_mode:
+            if vol_ratio > 1.8:
+                size *= 0.6
+            elif vol_ratio < 0.8:
+                size = min(base_allocation, base_allocation * 1.2)
+            if signal_type == "reversal":
+                size *= 0.75
+        else:
+            if vol_ratio > 1.5:
+                size *= 0.5
+            elif vol_ratio < 0.7:
+                size = min(base_allocation, base_allocation * 1.3)
+            if signal_type == "reversal":
+                size *= 0.6
 
         size = min(size, budget_remaining)
         shares = math.floor(size / price) if price > 0 else 0

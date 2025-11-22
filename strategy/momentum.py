@@ -13,7 +13,9 @@ router = PriceRouter()
 MOMENTUM_TOP_K = 10
 
 
-def compute_momentum_scores(symbols: Sequence[str], top_k: Optional[int] = MOMENTUM_TOP_K) -> List[Tuple[str, float]]:
+def compute_momentum_scores(
+    symbols: Sequence[str], top_k: Optional[int] = MOMENTUM_TOP_K, *, crash_mode: bool = False
+) -> List[Tuple[str, float]]:
     scores: List[Tuple[str, float]] = []
     for symbol in symbols:
         try:
@@ -35,7 +37,11 @@ def compute_momentum_scores(symbols: Sequence[str], top_k: Optional[int] = MOMEN
         base_vol = volume.tail(18).mean()
         vol_ratio = (recent_vol / base_vol) if pd.notna(base_vol) and base_vol else 0.0
 
-        score = ret_short * 0.5 + ret_mid * 0.3 + slope * 0.2
+        if crash_mode:
+            # allow negative short-term drifts; emphasize slope during crash
+            score = ret_short * 0.3 + ret_mid * 0.3 + slope * 0.4
+        else:
+            score = ret_short * 0.5 + ret_mid * 0.3 + slope * 0.2
         scores.append((symbol, score))
         logger.info(
             "Momentum %s → score=%.3f short=%.3f mid=%.3f slope=%.4f vol_ratio=%.2f",
@@ -48,6 +54,8 @@ def compute_momentum_scores(symbols: Sequence[str], top_k: Optional[int] = MOMEN
         )
 
     scores = sorted(scores, key=lambda x: x[1], reverse=True)
+    if crash_mode:
+        return scores  # do not trim universe during crash mode
     if top_k and top_k > 0:
         return scores[:top_k]
     return scores

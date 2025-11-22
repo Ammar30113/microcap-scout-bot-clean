@@ -23,7 +23,7 @@ else:
     logger.warning("Alpaca credentials missing; trading operations will be skipped.")
 
 
-def execute_trades(allocations):
+def execute_trades(allocations, crash_mode: bool = False):
     if not allocations:
         logger.info("No allocations to trade")
         return
@@ -62,8 +62,8 @@ def execute_trades(allocations):
             )
             continue
 
-        tp = take_profit_price(price)
-        sl = stop_loss_price(price)
+        tp = take_profit_price(price, crash_mode=crash_mode)
+        sl = stop_loss_price(price, crash_mode=crash_mode)
 
         order = MarketOrderRequest(
             symbol=symbol,

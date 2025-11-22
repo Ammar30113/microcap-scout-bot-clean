@@ -146,8 +146,14 @@ class MLClassifier:
         model.fit(X, y)
         return model
 
-    def predict(self, features: Dict[str, float]) -> float:
+    def predict(self, features: Dict[str, float], crash_mode: bool = False) -> float:
         vector = np.array([[features.get(col, 0.0) for col in FEATURE_COLUMNS]])
+        if crash_mode:
+            # weight ATR-band and MACD-hist higher during crash
+            macd_idx = FEATURE_COLUMNS.index("macd_hist")
+            atr_band_idx = FEATURE_COLUMNS.index("atr_band_position")
+            vector[0, macd_idx] *= 1.3
+            vector[0, atr_band_idx] *= 1.3
         proba = self.model.predict_proba(vector)[0][1]
         return float(np.clip(proba, 0.0, 1.0))
 
@@ -200,7 +206,7 @@ def _compute_vwap(df: pd.DataFrame) -> pd.Series:
 _ml_classifier = MLClassifier()
 
 
-def generate_predictions(universe: Iterable[str]) -> List[Tuple[str, float, Dict[str, float]]]:
+def generate_predictions(universe: Iterable[str], crash_mode: bool = False) -> List[Tuple[str, float, Dict[str, float]]]:
     predictions: List[Tuple[str, float, Dict[str, float]]] = []
     for symbol in universe:
         try:
@@ -214,7 +220,9 @@ def generate_predictions(universe: Iterable[str]) -> List[Tuple[str, float, Dict
             continue
 
         features = build_features(price_frame)
-        prob = _ml_classifier.predict(features)
+        if crash_mode:
+            features = {k: (0.0 if v is None or not np.isfinite(v) else v) for k, v in features.items()}
+        prob = _ml_classifier.predict(features, crash_mode=crash_mode)
         predictions.append((symbol, prob, features))
         logger.info("ML probability for %s → %.3f", symbol, prob)
     return predictions
