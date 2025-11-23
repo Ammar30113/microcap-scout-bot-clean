@@ -1,5 +1,8 @@
 import logging
 import time
+from datetime import datetime, time as dt_time
+
+import pytz
 
 from universe.universe_builder import get_universe
 from strategy.signal_router import route_signals
@@ -14,10 +17,21 @@ logger = logging.getLogger(__name__)
 price_router = PriceRouter()
 
 
+def market_open_now() -> bool:
+    est = pytz.timezone("America/New_York")
+    now = datetime.now(est).time()
+    market_open = dt_time(9, 30)
+    market_close = dt_time(16, 0)
+    return market_open <= now <= market_close
+
+
 def microcap_cycle():
     while True:
         start = time.time()
         try:
+            if not market_open_now():
+                logger.info("Market closed — skipping cycle")
+                continue
             crash, drop = is_crash_mode()
             logger.info("Crash mode = %s (SPY 5min drop = %.3f)", crash, drop)
             logger.info("=== Crash Mode %s ===", "ACTIVE" if crash else "OFF")
