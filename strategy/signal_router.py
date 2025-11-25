@@ -24,8 +24,9 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
 
     for symbol, prob, features in ml_preds:
         rank_component = 1.0 - (list(momentum_map.keys()).index(symbol) / max_rank) if symbol in momentum_map else 0.0
-        ml_threshold = 0.25 if crash_mode else 0.35
-        if prob < ml_threshold:
+        ml_threshold_trend = 0.22
+        ml_threshold_reversal = 0.28
+        if prob < ml_threshold_trend:
             continue
         sentiment = sentiment_score(symbol)
 
@@ -40,6 +41,7 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
 
         momentum_score = momentum_map.get(symbol, 0.0)
         vol_ratio = float(features.get("vol_ratio", 1.0) or 1.0)
+        vol_ok = vol_ratio > 0.20
 
         # volatility ratio via ATR relative to its recent average
         atr_series = compute_atr(df, window=14)
@@ -48,7 +50,7 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
         volatility_ratio = (atr_current / atr_avg) if atr_avg else 1.0
 
         reversal_score = compute_reversal_signal(df)
-        reverse_prob_cutoff = 0.40 if not crash_mode else 0.30
+        reverse_prob_cutoff = max(ml_threshold_reversal, 0.30 if crash_mode else ml_threshold_reversal)
         reversal_allowed = (
             -0.10 <= momentum_score <= 0.10
             and volatility_ratio > 1.05
@@ -56,21 +58,36 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
             and reversal_score != 0.0
         )
 
-        momentum_base = prob >= ml_threshold and passes_entry_filter(df, crash_mode=crash_mode)
-        score_threshold = 0.45 if crash_mode else 0.55
+        # slope confirmations
+        close = df["close"].astype(float)
+        short_slope = float(close.pct_change().tail(3).mean() or 0.0)
+        mid_slope = float(close.pct_change().tail(12).mean() or 0.0)
+
+        momentum_base = (
+            prob >= ml_threshold_trend
+            and passes_entry_filter(df, crash_mode=crash_mode)
+            and vol_ok
+            and short_slope > 0
+            and mid_slope > -0.005
+        )
+        score_threshold = 0.32
         final_score = 0.4 * rank_component + 0.2 * 1.0 + 0.2 * sentiment + 0.2 * prob
         momentum_signal = momentum_base and final_score > score_threshold
+
+        dip_buy_ok = short_slope < -0.20 and vol_ratio > 1.1 and prob > ml_threshold_reversal
 
         if momentum_signal:
             if reversal_allowed:
                 logger.info("Reversal candidate for %s but overridden by momentum", symbol)
                 logger.info("Momentum dominates reversal")
             logger.info(
-                "Entering momentum trade: %s, prob=%.3f, score=%.3f, crash_mode=%s",
+                "Entering momentum trade: %s, prob=%.3f, score=%.3f, crash_mode=%s reason=%s threshold=%.2f",
                 symbol,
                 prob,
                 momentum_score,
                 crash_mode,
+                "crash expansion" if crash_mode else "trend",
+                score_threshold,
             )
             signals.append(
                 {
@@ -81,17 +98,18 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
                     "type": "momentum",
                     "vol_ratio": vol_ratio,
                     "momentum_score": momentum_score,
+                    "reason": "crash expansion" if crash_mode else "trend",
                 }
             )
-        elif reversal_allowed:
-            logger.info("Momentum weak, reversal allowed for %s", symbol)
-            logger.info("Momentum skipped, reversal allowed")
+        elif dip_buy_ok:
             logger.info(
-                "Entering reversal trade: %s, prob=%.3f, rev_score=%.3f, crash_mode=%s",
+                "Entering reversal trade: %s, prob=%.3f, rev_score=%.3f, crash_mode=%s reason=%s threshold=%.2f",
                 symbol,
                 prob,
                 reversal_score,
                 crash_mode,
+                "dip buy",
+                ml_threshold_reversal,
             )
             signals.append(
                 {
@@ -101,6 +119,30 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
                     "type": "reversal",
                     "vol_ratio": vol_ratio,
                     "momentum_score": momentum_score,
+                    "reason": "dip buy",
+                }
+            )
+        elif reversal_allowed:
+            logger.info("Momentum weak, reversal allowed for %s", symbol)
+            logger.info("Momentum skipped, reversal allowed")
+            logger.info(
+                "Entering reversal trade: %s, prob=%.3f, rev_score=%.3f, crash_mode=%s reason=%s threshold=%.2f",
+                symbol,
+                prob,
+                reversal_score,
+                crash_mode,
+                "reversal",
+                reverse_prob_cutoff,
+            )
+            signals.append(
+                {
+                    "symbol": symbol,
+                    "prob": prob,
+                    "reversal_score": reversal_score,
+                    "type": "reversal",
+                    "vol_ratio": vol_ratio,
+                    "momentum_score": momentum_score,
+                    "reason": "reversal",
                 }
             )
         if crash_mode and len(signals) >= 3:
