@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Dict
 
 import requests
@@ -9,7 +10,7 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
-USE_FINNHUB = (str(os.getenv("USE_FINNHUB", "true")).lower() != "false")
+USE_FINNHUB = str(os.getenv("USE_FINNHUB", "true")).lower() != "false"
 _FINNHUB_DISABLED_REASON: str | None = None
 
 
