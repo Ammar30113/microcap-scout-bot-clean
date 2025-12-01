@@ -9,6 +9,7 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
+USE_FINNHUB = (str(os.getenv("USE_FINNHUB", "true")).lower() != "false")
 _FINNHUB_DISABLED_REASON: str | None = None
 
 
@@ -16,6 +17,9 @@ def fetch_sentiment(symbol: str) -> float:
     """Return Finnhub sentiment score for ``symbol`` (0-1 range)."""
 
     global _FINNHUB_DISABLED_REASON
+
+    if not USE_FINNHUB:
+        return 0.0
 
     if not settings.finnhub_api_key:
         return 0.0

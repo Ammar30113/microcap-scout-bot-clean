@@ -9,9 +9,10 @@ from data.price_router import PriceRouter
 
 STOP_LOSS_PCT = 0.006
 TAKE_PROFIT_PCT = 0.018
-MAX_POSITIONS = 5
 DAILY_BUDGET = float(os.getenv("DAILY_BUDGET_USD", 10000))
-MAX_POSITION_SIZE = DAILY_BUDGET / 3
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
+# Allow explicit override; otherwise default to one-third of daily budget
+MAX_POSITION_SIZE = float(os.getenv("MAX_POSITION_SIZE", DAILY_BUDGET / 3))
 price_router = PriceRouter()
 logger = logging.getLogger(__name__)
 
