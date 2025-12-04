@@ -4,8 +4,9 @@ import logging
 import time
 from typing import Dict, List
 
+from core.config import get_settings
 from data.price_router import PriceRouter
-from sentiment.engine import SentimentEngine
+from sentiment.engine import get_sentiment
 from strategy.momentum import compute_momentum_scores
 from strategy.technicals import passes_entry_filter, compute_atr
 from strategy.ml_classifier import generate_predictions
@@ -13,13 +14,10 @@ from strategy.reversal import compute_reversal_signal
 
 logger = logging.getLogger(__name__)
 price_router = PriceRouter()
-sentiment_engine = SentimentEngine()
+settings = get_settings()
 
 
 def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[str, float | str]]:
-    if len(universe) > 20:
-        sentiment_engine.preload(universe)
-
     momentum = compute_momentum_scores(universe, top_k=0, crash_mode=crash_mode)
     momentum_map = {sym: score for sym, score in momentum}
 
@@ -37,9 +35,11 @@ def route_signals(universe: List[str], crash_mode: bool = False) -> List[Dict[st
         ml_threshold_reversal = 0.28
         if prob < ml_threshold_trend:
             continue
-        sentiment_payload = sentiment_engine.get_sentiment(symbol)
-        sentiment_raw = float(sentiment_payload.get("sentiment_score", 0.0) or 0.0)
-        sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
+        sentiment = 0.0
+        if settings.use_sentiment:
+            sentiment_payload = get_sentiment(symbol)
+            sentiment_raw = float(sentiment_payload.get("sentiment_score", 0.0) or 0.0)
+            sentiment = (sentiment_raw + 1.0) / 2.0  # map [-1,1] to [0,1]
 
         try:
             bars = price_router.get_aggregates(symbol, window=120)

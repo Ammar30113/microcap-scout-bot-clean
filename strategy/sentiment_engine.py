@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import logging
 
-from sentiment.engine import SentimentEngine
+from core.config import get_settings
+from sentiment.engine import get_sentiment
 
 logger = logging.getLogger(__name__)
-_engine = SentimentEngine()
+settings = get_settings()
 
 
 def sentiment_score(symbol: str) -> float:
-    payload = _engine.get_sentiment(symbol)
+    if not settings.use_sentiment:
+        return 0.0
+    payload = get_sentiment(symbol)
     raw = float(payload.get("sentiment_score", 0.0) or 0.0)
     return (raw + 1.0) / 2.0
 

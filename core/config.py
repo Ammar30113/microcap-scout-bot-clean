@@ -31,15 +31,10 @@ class Settings:
         or os.getenv("ALPHAVANTAGE_KEY")
         or os.getenv("ALPHA_VANTAGE_KEY", "")
     )
-    marketaux_api_key: str = field(
-        default_factory=lambda: os.getenv("MARKETAX_API_KEY")
-        or os.getenv("MARKETAUX_API_KEY", "")
-    )
-    finage_api_key: str = field(default_factory=lambda: os.getenv("FINAGE_API_KEY") or os.getenv("MOON_API_KEY", ""))
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     use_sentiment: bool = field(default_factory=lambda: str(os.getenv("USE_SENTIMENT", "true")).lower() != "false")
+    use_finnhub: bool = field(default_factory=lambda: str(os.getenv("USE_FINNHUB", "false")).lower() == "true")
     sentiment_cache_ttl: int = field(default_factory=lambda: int(os.getenv("SENTIMENT_CACHE_TTL", "300")))
-    finnhub_api_key: str = field(default_factory=lambda: os.getenv("FINNHUB_API_KEY", ""))
-    newsapi_key: str = field(default_factory=lambda: os.getenv("NEWSAPI_KEY", ""))
 
     universe_fallback_csv: Path = field(
         default_factory=lambda: Path(os.getenv("UNIVERSE_FALLBACK_CSV", "universe/fallback_universe.csv"))
@@ -68,6 +63,5 @@ def get_settings() -> Settings:
     settings.portfolio_state_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("TWELVEDATA_API_KEY detected: %s", bool(settings.twelvedata_api_key))
     logger.info("ALPHAVANTAGE_API_KEY detected: %s", bool(settings.alphavantage_api_key))
-    logger.info("MARKETAUX_API_KEY detected: %s", bool(settings.marketaux_api_key))
-    logger.info("FINAGE/MOON API key detected: %s", bool(settings.finage_api_key))
+    logger.info("OPENAI_API_KEY detected: %s", bool(settings.openai_api_key))
     return settings
